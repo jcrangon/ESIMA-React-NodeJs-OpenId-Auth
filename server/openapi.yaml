@@ -1,0 +1,1070 @@
+openapi: 3.1.3
+info:
+  title: Blog API
+  version: "1.0.0"
+  description: |
+    API backend pour un blog avec:
+    - Auth par JWT access_token (cookie httpOnly)
+    - Refresh token rotatif en base (table RefreshToken)
+    - Gestion des utilisateurs, rôles, sécurité
+    - CRUD des posts
+    - Pagination standardisée
+    - Récupération de mot de passe (reset sécurisé + rotation des sessions)
+
+servers:
+  - url: http://localhost:8080
+    description: Dév local
+
+tags:
+  - name: Auth
+    description: Authentification & session
+  - name: Users
+    description: Gestion du compte utilisateur et administration
+  - name: Posts
+    description: Gestion des articles du blog
+
+components:
+  securitySchemes:
+    AccessTokenCookie:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: |
+        Jeton d'accès JWT court.
+        - Envoyé par le backend dans un cookie httpOnly `access_token`.
+        - Le navigateur le renvoie automatiquement.
+        - Dans Swagger/Postman, tu dois le simuler à la main.
+
+  schemas:
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          properties:
+            status:
+              type: integer
+              example: 401
+            code:
+              type: string
+              example: UNAUTHORIZED
+            message:
+              type: string
+              example: Non authentifié
+            traceId:
+              type: string
+              description: ID de requête utile au debug
+            stack:
+              type: string
+              description: Inclus seulement en dev
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 10
+        totalItems:
+          type: integer
+          example: 37
+        totalPages:
+          type: integer
+          example: 4
+        hasNextPage:
+          type: boolean
+        hasPrevPage:
+          type: boolean
+
+    UserPublic:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [ROLE_USER, ROLE_ADMIN]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    # /users/me renvoie la même forme publique
+    UserMe:
+      $ref: "#/components/schemas/UserPublic"
+
+    UpdateMeBody:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Nouveau nom affiché
+
+    ChangePasswordBody:
+      type: object
+      required:
+        - currentPassword
+        - newPassword
+      properties:
+        currentPassword:
+          type: string
+          minLength: 1
+        newPassword:
+          type: string
+          minLength: 8
+          description: |
+            Doit respecter les règles de complexité backend
+            (majuscule, minuscule, chiffre, etc.)
+
+    RegisterBody:
+      type: object
+      required:
+        - name
+        - email
+        - password
+        - confirmPassword
+      properties:
+        name:
+          type: string
+          minLength: 2
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          description: |
+            Au moins:
+            - 1 minuscule
+            - 1 majuscule
+            - 1 chiffre
+        confirmPassword:
+          type: string
+          description: Doit être identique à `password`
+
+    RegisterResponse:
+      type: object
+      properties:
+        user:
+          type: object
+          properties:
+            id:
+              type: integer
+            email:
+              type: string
+              format: email
+            createdAt:
+              type: string
+              format: date-time
+
+    LoginBody:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        rememberMe:
+          type: boolean
+          description: |
+            true  → session longue (ex: 30j)
+            false → session courte (ex: 7j)
+
+    LoginResponse:
+      type: object
+      description: |
+        Le serveur renvoie :
+        - un cookie httpOnly 'access_token' (non visible ici)
+        - un refreshToken dans le corps
+      properties:
+        user:
+          $ref: "#/components/schemas/UserPublic"
+        refreshToken:
+          type: string
+          description: Refresh JWT à stocker côté client
+        refreshId:
+          type: integer
+          description: ID en base du refresh token
+        refreshExpiresAt:
+          type: string
+          format: date-time
+        rememberMe:
+          type: boolean
+
+    RefreshBody:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          description: Refresh token courant
+
+    RefreshResponse:
+      type: object
+      description: |
+        Renvoie:
+        - user
+        - le NOUVEAU refreshToken
+        - refreshExpiresAt
+        Et met à jour le cookie httpOnly `access_token`.
+      properties:
+        user:
+          $ref: "#/components/schemas/UserPublic"
+        refreshToken:
+          type: string
+        refreshId:
+          type: integer
+        refreshExpiresAt:
+          type: string
+          format: date-time
+
+    LogoutBody:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          description: |
+            Optionnel.
+            S'il est fourni, il est révoqué en base.
+            Dans tous les cas, le cookie access_token est supprimé.
+
+    # ---- NOUVEAU ----
+    ForgotPasswordBody:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          description: L'email du compte qui demande une réinitialisation.
+
+    ForgotPasswordResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Si un compte existe avec cet email, un lien de réinitialisation a été envoyé."
+
+    # ---- NOUVEAU ----
+    ResetPasswordBody:
+      type: object
+      required:
+        - token
+        - password
+        - confirmPassword
+      properties:
+        token:
+          type: string
+          description: Token de réinitialisation reçu par email.
+        password:
+          type: string
+          minLength: 8
+          description: Nouveau mot de passe.
+        confirmPassword:
+          type: string
+          description: Doit être identique à password.
+
+    ResetPasswordResponse:
+      type: object
+      description: |
+        Après réinitialisation réussie :
+        - le mot de passe est mis à jour
+        - toutes les anciennes sessions sont révoquées
+        - on crée une nouvelle session (nouvel access_token + refreshToken)
+      properties:
+        message:
+          type: string
+          example: "Mot de passe réinitialisé"
+        user:
+          $ref: "#/components/schemas/UserPublic"
+        refreshToken:
+          type: string
+        refreshId:
+          type: integer
+        refreshExpiresAt:
+          type: string
+          format: date-time
+
+    PostPublic:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        content:
+          type: string
+        coverUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        author:
+          type: object
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
+              nullable: true
+            email:
+              type: string
+              format: email
+            role:
+              type: string
+              enum: [ROLE_USER, ROLE_ADMIN]
+
+    CreatePostBody:
+      type: object
+      required:
+        - title
+        - content
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        coverUrl:
+          type: string
+          nullable: true
+
+    UpdatePostBody:
+      type: object
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        coverUrl:
+          type: string
+          nullable: true
+
+    PaginatedPosts:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostPublic"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    PaginatedUsers:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserPublic"
+        pagination:
+          $ref: "#/components/schemas/PaginationMeta"
+
+
+paths:
+
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      summary: Créer un nouvel utilisateur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterBody"
+      responses:
+        "201":
+          description: Utilisateur créé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "409":
+          description: Conflit (email déjà utilisé)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Authentifier un utilisateur et démarrer la session
+      description: |
+        - Renvoie un cookie httpOnly `access_token`
+        - Renvoie un `refreshToken` dans le corps
+        - Supporte `rememberMe`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Connecté
+          headers:
+            Set-Cookie:
+              description: Cookie httpOnly `access_token` envoyé par le serveur
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Identifiants invalides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/refresh:
+    post:
+      tags:
+        - Auth
+      summary: Rafraîchir la session (rotation du refresh token)
+      description: |
+        - Nécessite un refreshToken valide dans le body.
+        - Renvoie un NOUVEAU refreshToken et remet un nouveau cookie access_token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshBody"
+      responses:
+        "200":
+          description: Session régénérée
+          headers:
+            Set-Cookie:
+              description: Nouveau cookie httpOnly `access_token`
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+        "401":
+          description: Refresh token invalide / expiré / révoqué
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: Déconnecter l'utilisateur
+      description: |
+        - Supprime le cookie access_token (httpOnly)
+        - Révoque le refreshToken fourni si présent
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutBody"
+      responses:
+        "200":
+          description: Déconnecté
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Déconnecté"
+
+  /auth/status:
+    get:
+      tags:
+        - Auth
+      summary: Vérifier le statut du serveur
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: OK
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /auth/forgot-password:
+    post:
+      tags:
+        - Auth
+      summary: Demander un email de réinitialisation de mot de passe
+      description: |
+        - Toujours répondre 200, même si l'email n'existe pas.
+        - Si l'utilisateur existe:
+          - enregistre un token unique en DB (expire ~15 min)
+          - envoie un email avec un lien `reset-password?token=...`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgotPasswordBody"
+      responses:
+        "200":
+          description: Message générique de succès
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgotPasswordResponse"
+
+  /auth/reset-password:
+    post:
+      tags:
+        - Auth
+      summary: Réinitialiser le mot de passe via un token reçu par email
+      description: |
+        - Vérifie le token (non expiré, non déjà utilisé)
+        - Met à jour le mot de passe utilisateur
+        - Marque le token comme utilisé
+        - Révoque tous les refreshToken précédents
+        - Reconnecte automatiquement l'utilisateur en émettant
+          un nouvel access_token + refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordBody"
+      responses:
+        "200":
+          description: Mot de passe réinitialisé, nouvelle session créée
+          headers:
+            Set-Cookie:
+              description: Nouveau cookie httpOnly `access_token`
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetPasswordResponse"
+        "401":
+          description: Token expiré / invalide / déjà utilisé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/me:
+    get:
+      tags:
+        - Users
+      summary: Récupérer mon profil
+      security:
+        - AccessTokenCookie: []
+      responses:
+        "200":
+          description: Profil courant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/UserPublic"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      tags:
+        - Users
+      summary: Mettre à jour mon profil
+      security:
+        - AccessTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMeBody"
+      responses:
+        "200":
+          description: Profil mis à jour
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/UserPublic"
+        "400":
+          description: Mauvaise requête (ex aucun champ fourni)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/me/password:
+    patch:
+      tags:
+        - Users
+      summary: Changer mon mot de passe
+      security:
+        - AccessTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordBody"
+      responses:
+        "200":
+          description: Mot de passe mis à jour + nouveau cookie access_token
+          headers:
+            Set-Cookie:
+              description: Cookie httpOnly access_token régénéré
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Mot de passe mis à jour"
+                  user:
+                    $ref: "#/components/schemas/UserPublic"
+        "403":
+          description: Mot de passe actuel incorrect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users:
+    get:
+      tags:
+        - Users
+      summary: Lister les utilisateurs (ADMIN)
+      description: |
+        Accessible uniquement aux admins.
+        Supporte la pagination: ?page=1&limit=10
+      security:
+        - AccessTokenCookie: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        "200":
+          description: Liste paginée de tous les utilisateurs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedUsers"
+        "403":
+          description: Accès refusé (pas admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/{id}:
+    get:
+      tags:
+        - Users
+      summary: Lire un utilisateur par ID
+      description: |
+        - ROLE_ADMIN peut lire n'importe qui.
+        - ROLE_USER ne peut lire que lui-même.
+      security:
+        - AccessTokenCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Détails utilisateur
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/UserPublic"
+        "403":
+          description: Accès refusé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Introuvable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users/{id}/role:
+    patch:
+      tags:
+        - Users
+      summary: Mettre à jour le rôle d'un utilisateur (ADMIN)
+      security:
+        - AccessTokenCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - role
+              properties:
+                role:
+                  type: string
+                  enum:
+                    - ROLE_USER
+                    - ROLE_ADMIN
+      responses:
+        "200":
+          description: Rôle mis à jour
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Rôle mis à jour"
+                  user:
+                    $ref: "#/components/schemas/UserPublic"
+        "403":
+          description: Accès refusé (pas admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags:
+        - Users
+      summary: Supprimer un utilisateur (ADMIN)
+      description: |
+        Supprime l'utilisateur et ses posts (cascade).
+        Refusé si l'admin essaie de se supprimer lui-même.
+      security:
+        - AccessTokenCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Utilisateur supprimé
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Utilisateur supprimé"
+        "403":
+          description: Interdit (pas admin ou auto-suppression)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /posts:
+    get:
+      tags:
+        - Posts
+      summary: Lister tous les posts (public, paginé)
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Liste paginée des posts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedPosts"
+
+    post:
+      tags:
+        - Posts
+      summary: Créer un post (auth requis)
+      security:
+        - AccessTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePostBody"
+      responses:
+        "201":
+          description: Post créé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostPublic"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /posts/me:
+    get:
+      tags:
+        - Posts
+      summary: Lister MES posts (auth requis)
+      security:
+        - AccessTokenCookie: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Liste paginée de MES posts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedPosts"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /posts/{id}:
+    get:
+      tags:
+        - Posts
+      summary: Lire un post par ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Détails du post
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostPublic"
+        "404":
+          description: Introuvable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      tags:
+        - Posts
+      summary: Modifier l'un de MES posts (auth requis)
+      description: Seul l'auteur du post peut le modifier.
+      security:
+        - AccessTokenCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePostBody"
+      responses:
+        "200":
+          description: Post mis à jour
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostPublic"
+        "403":
+          description: Interdit (pas auteur)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Introuvable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags:
+        - Posts
+      summary: Supprimer l'un de MES posts (auth requis)
+      description: Seul l'auteur du post peut le supprimer.
+      security:
+        - AccessTokenCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Post supprimé
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Post supprimé"
+        "403":
+          description: Interdit (pas auteur)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Introuvable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Non authentifié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
