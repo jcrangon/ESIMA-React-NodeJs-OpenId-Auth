@@ -4,6 +4,7 @@ import { validate } from "../middlewares/validate";
 import { loginSchema, refreshSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema } from "../dtos/auth.dto";
 import { asyncHandler } from "../utils/asyncHandler";
 import { requireAuth } from "../middlewares/auth.middleware";
+import { oidcLogin, oidcCallback } from "../controllers/oidc.controller";
 const r = Router();
 
 // Liaison du segment d'url avec la méthode de contrôleur à executer
@@ -25,6 +26,11 @@ r.post(
   validate(resetPasswordSchema),
   asyncHandler(resetPasswordFromToken)
 );
+
+// OIDC
+r.get("/oidc/login", asyncHandler(oidcLogin));
+r.get("/callback", asyncHandler(oidcCallback));
+
 
 export default r;
 

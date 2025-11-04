@@ -6,11 +6,14 @@ import { extractAppErrorPayload } from "@/axios/axios";
 import { useAuth } from "@/auth/AuthContext";
 import { useNavigate } from "react-router-dom";
 
+
 type LoginFormData = {
   email: string;
   password: string;
   rememberMe: boolean;
 };
+
+const apiBase = import.meta.env.VITE_API_URL;
 
 export default function LoginPage() {
   // état du formulaire
@@ -172,6 +175,17 @@ export default function LoginPage() {
             <span className="hint">Mot de passe oublié ?</span>{" "}
             <a className="forgot-link" href="/auth/forgot-password">
               Réinitialiser mon mot de passe
+            </a>
+          </div>
+
+          {/* OIDC */}
+          <div className="divider">
+            <span>ou</span>
+          </div>
+
+          <div className="oidc-block">
+            <a className="oidc-btn" href={`${apiBase}/auth/oidc/login`}>
+              Se connecter avec Keycloak
             </a>
           </div>
 

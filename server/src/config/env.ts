@@ -94,6 +94,13 @@ export const env = {
   SMTP_PORT: process.env.SMTP_PORT || "25",
   SMTP_USER: process.env.SMTP_USER || "smtp-test",
   SMTP_PASS: process.env.SMTP_PASS || "123456",
+  
+  KEYCLOAK_REALM: process.env.KEYCLOAK_REALM || "demo-realm",
+  KEYCLOAK_ISSUER_URL: process.env.KEYCLOAK_ISSUER_URL || "http://localhost:8082/realms/demo-realm",
+  KEYCLOAK_CLIENT_ID: process.env.KEYCLOAK_CLIENT_ID || "react-nodejs-blog-app",
+  KEYCLOAK_CLIENT_SECRET: process.env.KEYCLOAK_CLIENT_SECRET || "",
+  KEYCLOAK_REDIRECT_URI: process.env.KEYCLOAK_REDIRECT_URI || "http://localhost:8080/auth/callback",
+  FRONTEND_BASE_URL: process.env.FRONTEND_BASE_URL || "http://localhost:5173"
 };
 
 if (IS_DEV) {
